@@ -11,7 +11,7 @@ The `deploy/` directory contains the YAML files needed to deploy Dynamo-TRTLLM w
 
 
 #### Docker
-As of Dynamo 0.9.0, the release branch does not have support for DP-level routing in TRTLLM. Our containers are built from commit `b5c0db6` [link](https://github.com/ai-dynamo/dynamo/commit/b5c0db63c3914513c445c829f6dafcdef9e0f62d). Replace `<dynamo-trtllm-container-path>` [e.g. here]((deploy/agg.yaml#L126)) with your build wherever relevant
+As of Dynamo 0.9.0, the release branch does not have support for DP-level routing in TRTLLM. Our containers are built from commit `b5c0db6` [link](https://github.com/ai-dynamo/dynamo/commit/b5c0db63c3914513c445c829f6dafcdef9e0f62d). Replace `<dynamo-trtllm-container-path>` [(e.g. here)](deploy/agg.yaml#L122) with your build wherever relevant.
 
 #### Setup Notes
 
