@@ -118,7 +118,7 @@ spec:
             - name: TLLM_OVERRIDE_LAYER_NUM
               value: "61"
             - name: TLLM_LOG_LEVEL
-              value: "VERBOSE"
+              value: "INFO"
           image: <dynamo-trtllm-container-path>
           name: ""
           resources: {}
