@@ -1,0 +1,195 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# AIPerf benchmark job for Dynamo TRTLLM deployment of DeepSeek-V3.2 NVFP4.  
+#
+# Apply: kubectl apply -f perf.yaml -n your-namespace
+#
+# Prerequisites:
+#   - DGD with `your-deployment-name` (e.g. disagg-kv-dsv32-nvfp4) deployed and in ready state
+#   - model-cache PVC exists in your-namespace
+#   - nvcr-imagepullsecret exists
+#
+# Results: /model-cache/perf/<epoch>_<job-name>/
+#
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: your-deployment-name-bench
+  namespace: your-namespace
+spec:
+  backoffLimit: 1
+  completions: 1
+  parallelism: 1
+  template:
+    metadata:
+      labels:
+        app: your-deployment-name-bench
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: nvidia.com/dynamo-graph-deployment-name
+                    operator: In
+                    values:
+                      - your-deployment-name
+              topologyKey: kubernetes.io/hostname
+      tolerations:
+        - key: dedicated
+          operator: Equal
+          value: user-workload
+          effect: NoSchedule
+        - key: dedicated
+          operator: Equal
+          value: user-workload
+          effect: NoExecute
+        - key: dedicated
+          operator: Equal
+          value: system-workload
+          effect: NoSchedule
+        - key: dedicated
+          operator: Equal
+          value: system-workload
+          effect: NoExecute
+      containers:
+      - command:
+        - /bin/bash
+        - -c
+        - |
+          set -e
+          ulimit -n 600000
+          echo "File descriptor limit set to: $(ulimit -n)"
+          echo 2097152 > /proc/sys/fs/inotify/max_user_watches 2>/dev/null || true
+          echo 1024 > /proc/sys/fs/inotify/max_user_instances 2>/dev/null || true
+          apt-get update && apt-get install -y curl jq procps git && apt-get clean
+          pip install aiperf
+          echo "aiperf installation completed"
+          sysctl -w net.ipv4.ip_local_port_range="1024 65000" 2>/dev/null || true
+          export COLUMNS=200
+          EPOCH=$(date +%s)
+
+          wait_for_model_ready() {
+            echo "Waiting for model '$TARGET_MODEL' at $ENDPOINT/v1/models (checking every 5s)..."
+            while ! curl -sf "http://$ENDPOINT/v1/models" | jq -e --arg model "$TARGET_MODEL" '.data[]? | select(.id == $model)' >/dev/null 2>&1; do
+              echo "[$(date '+%H:%M:%S')] Model not ready yet, sleeping 5s..."
+              sleep 5
+            done
+            echo "Model '$TARGET_MODEL' is now available!"
+            curl -s "http://$ENDPOINT/v1/models" | jq .
+          }
+
+          run_perf() {
+            local concurrency=$1
+            local isl=$2
+            local osl=$3
+            key=concurrency_${concurrency}_isl${isl}_osl${osl}
+            export ARTIFACT_DIR="${ROOT_ARTIFACT_DIR}/${EPOCH}_${JOB_NAME}/${key}"
+            mkdir -p "$ARTIFACT_DIR"
+            echo "Running: concurrency=$concurrency, isl=$isl, osl=$osl -> $ARTIFACT_DIR"
+            REQUEST_RATE_ARGS=""
+            if [ -n "${REQUEST_RATE:-}" ]; then
+              REQUEST_RATE_ARGS="--request-rate ${REQUEST_RATE} --request-rate-mode ${REQUEST_RATE_MODE:-constant}"
+            fi
+            SERVER_METRICS_ARGS=()
+            if [ -n "${AIPERF_SERVER_METRICS_URLS:-}" ]; then
+              IFS=',' read -r -a server_metrics_urls <<< "${AIPERF_SERVER_METRICS_URLS}"
+              if [ ${#server_metrics_urls[@]} -gt 0 ]; then
+                SERVER_METRICS_ARGS+=(--server-metrics "${server_metrics_urls[@]}")
+              fi
+            fi
+            aiperf profile --artifact-dir "$ARTIFACT_DIR" \
+              --model "$TARGET_MODEL" \
+              --tokenizer "$TARGET_MODEL" \
+              --endpoint-type chat \
+              --endpoint /v1/chat/completions \
+              --streaming \
+              --url "http://$ENDPOINT" \
+              --synthetic-input-tokens-mean "$isl" \
+              --synthetic-input-tokens-stddev 0 \
+              --output-tokens-mean "$osl" \
+              --output-tokens-stddev 0 \
+              --extra-inputs "max_tokens:$osl" \
+              --extra-inputs "min_tokens:$osl" \
+              --extra-inputs "ignore_eos:true" \
+              --extra-inputs "{\"nvext\":{\"ignore_eos\":true}}" \
+              --concurrency "$concurrency" \
+              ${REQUEST_RATE_ARGS} \
+              --request-count 100 \
+              --warmup-request-count 2 \
+              --random-seed 100 \
+              --workers-max 200 \
+              --request-timeout-seconds 1200 \
+              --profile-export-level records \
+              -H 'Authorization: Bearer NOT USED' \
+              -H 'Accept: text/event-stream' \
+              --record-processors 8 \
+              "${SERVER_METRICS_ARGS[@]}" \
+              --ui simple
+            echo "Results: $ARTIFACT_DIR"
+            ls -la "$ARTIFACT_DIR"
+          }
+
+          wait_for_model_ready
+          mkdir -p "${ROOT_ARTIFACT_DIR}/${EPOCH}_${JOB_NAME}"
+
+          printf '{"deployment":"your-deployment-name","model":"nvidia/DeepSeek-V3.2-NVFP4","gpu_count":8,"concurrencies":"%s","isl":%s,"osl":%s,"endpoint":"%s"}\n' \
+            "${CHOSEN_CONCURRENCIES}" "${ISL}" "${OSL}" "${ENDPOINT}" \
+            > "${ROOT_ARTIFACT_DIR}/${EPOCH}_${JOB_NAME}/input_config.json"
+
+          CONCURRENCY_LIST="$(echo "${CHOSEN_CONCURRENCIES}" | tr ',' ' ')"
+          for c in ${CONCURRENCY_LIST}; do
+            run_perf "$c" "${ISL}" "${OSL}"
+          done
+
+          echo "Benchmark complete!"
+        env:
+        - name: TARGET_MODEL
+          value: nvidia/DeepSeek-V3.2-NVFP4
+        - name: ENDPOINT
+          value: your-deployment-name-frontend:8000
+        - name: CHOSEN_CONCURRENCIES
+          value: "8,16,24"
+        - name: ISL
+          value: "35000"
+        - name: OSL
+          value: "500"
+        - name: DEPLOYMENT_GPU_COUNT
+          value: "8"
+        - name: REQUEST_RATE
+          value: ""
+        - name: REQUEST_RATE_MODE
+          value: "constant"
+        - name: AIPERF_HTTP_CONNECTION_LIMIT
+          value: "200"
+        # TRT-LLM metrics from worker /metrics on port 9090. 
+        - name: AIPERF_SERVER_METRICS_URLS
+          value: "http://your-deployment-name-dec-0-dec-wkr:9090/metrics,http://your-deployment-name-prefill-0:9090/metrics"
+        - name: JOB_NAME
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.labels['job-name']
+        - name: ROOT_ARTIFACT_DIR
+          value: /model-cache/perf
+        - name: HF_HOME
+          value: /model-cache
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        image: python:3.12-slim
+        imagePullPolicy: IfNotPresent
+        name: perf
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: model-cache
+          mountPath: /model-cache
+        workingDir: /workspace
+      imagePullSecrets:
+      - name: nvcr-imagepullsecret
+      restartPolicy: Never
+      volumes:
+      - name: model-cache
+        persistentVolumeClaim:
+          claimName: model-cache
