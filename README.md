@@ -19,7 +19,7 @@ As of Dynamo 0.9.0, the release branch does not have support for DP-level routin
 
 ### Benchmark Settings
 
-The `perf/` directory contains the trace data and YAML configuration for [AIPerf](https://github.com/ai-dynamo/aiperf/tree/main)-based benchmarking. For live debugging, use AIPerf's real-time metrics board TUI.
+The `perf/` directory contains the trace data and YAML configuration for [AIPerf](https://github.com/ai-dynamo/aiperf/tree/main)-based benchmarking. Modify env variables such as `TTFT_THRESHOLD_MS`,`ITL_THRESHOLD_MS` (SLA to calculate goodput) and `TRACE_FILE` as necessary. For live debugging, use AIPerf's real-time metrics board TUI.
 
 To reproduce our experiments, use `perf/conversation_trace_synth_16.00x1+10.00_speedup1_maxisl110000.jsonl`. (We also include a "mini" version for quick iterations, with the first 2000 trace entries.) This is a Mooncake-style trace file synthetically generated using Dynamo's [prefix data generator tool](https://github.com/ai-dynamo/dynamo/tree/main/benchmarks/prefix_data_generator). The ISL/OSL/cache hit statistics of the trace is below.
 
