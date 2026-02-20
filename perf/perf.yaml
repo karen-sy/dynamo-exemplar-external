@@ -63,7 +63,8 @@ spec:
           echo 2097152 > /proc/sys/fs/inotify/max_user_watches 2>/dev/null || true
           echo 1024 > /proc/sys/fs/inotify/max_user_instances 2>/dev/null || true
           apt-get update && apt-get install -y curl jq procps git && apt-get clean
-          pip install aiperf
+          # pip install git+https://github.com/ai-dynamo/aiperf.git
+          pip install aiperf==0.4.0
           echo "aiperf installation completed"
           sysctl -w net.ipv4.ip_local_port_range="1024 65000" 2>/dev/null || true
           export COLUMNS=200
@@ -79,70 +80,93 @@ spec:
             curl -s "http://$ENDPOINT/v1/models" | jq .
           }
 
-          run_perf() {
-            local concurrency=$1
-            local isl=$2
-            local osl=$3
-            key=concurrency_${concurrency}_isl${isl}_osl${osl}
-            export ARTIFACT_DIR="${ROOT_ARTIFACT_DIR}/${EPOCH}_${JOB_NAME}/${key}"
-            mkdir -p "$ARTIFACT_DIR"
-            echo "Running: concurrency=$concurrency, isl=$isl, osl=$osl -> $ARTIFACT_DIR"
-            REQUEST_RATE_ARGS=""
-            if [ -n "${REQUEST_RATE:-}" ]; then
-              REQUEST_RATE_ARGS="--request-rate ${REQUEST_RATE} --request-rate-mode ${REQUEST_RATE_MODE:-constant}"
-            fi
-            SERVER_METRICS_ARGS=()
-            if [ -n "${AIPERF_SERVER_METRICS_URLS:-}" ]; then
-              IFS=',' read -r -a server_metrics_urls <<< "${AIPERF_SERVER_METRICS_URLS}"
-              if [ ${#server_metrics_urls[@]} -gt 0 ]; then
-                SERVER_METRICS_ARGS+=(--server-metrics "${server_metrics_urls[@]}")
-              fi
-            fi
-            aiperf profile --artifact-dir "$ARTIFACT_DIR" \
-              --model "$TARGET_MODEL" \
-              --tokenizer "$TARGET_MODEL" \
-              --endpoint-type chat \
-              --endpoint /v1/chat/completions \
-              --streaming \
-              --url "http://$ENDPOINT" \
-              --synthetic-input-tokens-mean "$isl" \
-              --synthetic-input-tokens-stddev 0 \
-              --output-tokens-mean "$osl" \
-              --output-tokens-stddev 0 \
-              --extra-inputs "max_tokens:$osl" \
-              --extra-inputs "min_tokens:$osl" \
-              --extra-inputs "ignore_eos:true" \
-              --extra-inputs "{\"nvext\":{\"ignore_eos\":true}}" \
-              --concurrency "$concurrency" \
-              ${REQUEST_RATE_ARGS} \
-              --request-count 100 \
-              --warmup-request-count 2 \
-              --random-seed 100 \
-              --workers-max 200 \
-              --request-timeout-seconds 1200 \
-              --profile-export-level records \
-              -H 'Authorization: Bearer NOT USED' \
-              -H 'Accept: text/event-stream' \
-              --record-processors 8 \
-              "${SERVER_METRICS_ARGS[@]}" \
-              --ui simple
-            echo "Results: $ARTIFACT_DIR"
-            ls -la "$ARTIFACT_DIR"
-          }
-
           wait_for_model_ready
           mkdir -p "${ROOT_ARTIFACT_DIR}/${EPOCH}_${JOB_NAME}"
 
-          printf '{"deployment":"your-deployment-name","model":"nvidia/DeepSeek-V3.2-NVFP4","gpu_count":8,"concurrencies":"%s","isl":%s,"osl":%s,"endpoint":"%s"}\n' \
-            "${CHOSEN_CONCURRENCIES}" "${ISL}" "${OSL}" "${ENDPOINT}" \
+          # Validate trace file
+          if [ ! -f "${TRACE_FILE}" ]; then
+            echo "ERROR: Trace file not found: ${TRACE_FILE}"
+            echo "Copy trace to PVC first: kubectl cp <local_trace> karenc-dynamo/<pod>:/model-cache/traces/"
+            exit 1
+          fi
+          TRACE_LINES=$(wc -l < "${TRACE_FILE}")
+          echo "Trace contains ${TRACE_LINES} requests"
+
+          printf '{"deployment":"__DGD_NAME__","model":"%s","trace_file":"%s","trace_requests":%d,"ttft_threshold_ms":%s,"itl_threshold_ms":%s,"endpoint":"%s"}\n' \
+            "${TARGET_MODEL}" "${TRACE_FILE}" "${TRACE_LINES}" "${TTFT_THRESHOLD_MS}" "${ITL_THRESHOLD_MS}" "${ENDPOINT}" \
             > "${ROOT_ARTIFACT_DIR}/${EPOCH}_${JOB_NAME}/input_config.json"
 
-          CONCURRENCY_LIST="$(echo "${CHOSEN_CONCURRENCIES}" | tr ',' ' ')"
-          for c in ${CONCURRENCY_LIST}; do
-            run_perf "$c" "${ISL}" "${OSL}"
-          done
+          TRACE_BASE_NAME="$(basename "${TRACE_FILE}" .jsonl)"
+          export ARTIFACT_DIR="${ROOT_ARTIFACT_DIR}/${EPOCH}_${JOB_NAME}/${TRACE_BASE_NAME}"
+          mkdir -p "$ARTIFACT_DIR"
 
+          # Server metrics args
+          SERVER_METRICS_ARGS=()
+          if [ -n "${AIPERF_SERVER_METRICS_URLS:-}" ]; then
+            IFS=',' read -r -a server_metrics_urls <<< "${AIPERF_SERVER_METRICS_URLS}"
+            if [ ${#server_metrics_urls[@]} -gt 0 ]; then
+              SERVER_METRICS_ARGS+=(--server-metrics "${server_metrics_urls[@]}")
+            fi
+          fi
+
+          echo "=============================================="
+          echo "Trace Replay Benchmark (aiperf)"
+          echo "=============================================="
+          echo "Endpoint: http://${ENDPOINT}"
+          echo "Model: ${TARGET_MODEL}"
+          echo "Trace file: ${TRACE_FILE} (${TRACE_LINES} requests)"
+          echo "TTFT Threshold: ${TTFT_THRESHOLD_MS}ms"
+          echo "ITL Threshold: ${ITL_THRESHOLD_MS}ms"
+          echo "Artifact dir: ${ARTIFACT_DIR}"
+          echo "=============================================="
+
+          echo ""
+          echo "Running warmup benchmark..."
+          aiperf profile \
+            -m "${TARGET_MODEL}" \
+            --tokenizer "${TARGET_MODEL}" \
+            --url "http://${ENDPOINT}" \
+            --streaming \
+            --ui dashboard \
+            --synthetic-input-tokens-mean 10000 \
+            --synthetic-input-tokens-stddev 0 \
+            --output-tokens-mean 200 \
+            --output-tokens-stddev 0 \
+            --extra-inputs "max_tokens:200" \
+            --extra-inputs "min_tokens:200" \
+            --extra-inputs "ignore_eos:true" \
+            --concurrency 4 \
+            --request-count 10
+          echo "Warmup complete"
+
+          # Trace replay
+          echo ""
+          echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting trace replay benchmark"
+          aiperf profile \
+            -m "${TARGET_MODEL}" \
+            --tokenizer "${TARGET_MODEL}" \
+            --input-file "${TRACE_FILE}" \
+            --custom-dataset-type mooncake_trace \
+            --fixed-schedule \
+            --url "http://${ENDPOINT}" \
+            --streaming \
+            --random-seed 42 \
+            --ui dashboard \
+            --artifact-dir "${ARTIFACT_DIR}" \
+            --workers-max 200 \
+            --request-timeout-seconds 1000 \
+            --profile-export-level records \
+            --record-processors 8 \
+            "${SERVER_METRICS_ARGS[@]}" \
+            --goodput "time_to_first_token:${TTFT_THRESHOLD_MS} inter_token_latency:${ITL_THRESHOLD_MS}"
+
+          BENCH_EXIT_CODE=$?
+          echo ""
+          echo "$(date '+%Y-%m-%d %H:%M:%S') - Benchmark complete (exit code: ${BENCH_EXIT_CODE})"
+          echo "Results: ${ARTIFACT_DIR}"
+          ls -la "${ARTIFACT_DIR}" 2>/dev/null || true
           echo "Benchmark complete!"
+          exit $BENCH_EXIT_CODE
         env:
         - name: TARGET_MODEL
           value: nvidia/DeepSeek-V3.2-NVFP4
