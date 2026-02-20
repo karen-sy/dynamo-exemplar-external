@@ -9,10 +9,13 @@ The `deploy/` directory contains the YAML files needed to deploy Dynamo-TRTLLM w
 - **Dynamo Baseline** (Aggregated serving + Round Robin routing; 4 DEP8 workers): `agg.yaml`
 - **Dynamo Consolidated** (Disaggregated serving + KV routing; 2 DEP8 prefill workers, 2 DEP8 decode workers): `disagg.yaml`
 
+
+#### Docker
+As of Dynamo 0.9.0, the release branch does not have support for DP-level routing in TRTLLM. Our containers are built from commit `b5c0db6` [link](https://github.com/ai-dynamo/dynamo/commit/b5c0db63c3914513c445c829f6dafcdef9e0f62d). Replace `<dynamo-trtllm-container-path>` [e.g. here]((deploy/agg.yaml#L126)) with your build wherever relevant
+
 #### Setup Notes
 
 - In our setup, the deployments require a ComputeDomain to be configured to ensure MNNVL-connected pods. An example is provided in `deploy/_compute-domain.yaml`, which is the ComputeDomain referenced by the deployment YAMLs. Modify or remove according to your configuration needs.
-- We use Dynamo 0.8.0 with TRTLLM 1.0rc3.
 
 ### Benchmark Settings
 

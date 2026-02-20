@@ -8,7 +8,6 @@
 # Prerequisites:
 #   - DGD with `your-deployment-name` (e.g. disagg-kv-dsv32-nvfp4) deployed and in ready state
 #   - model-cache PVC exists in your-namespace
-#   - nvcr-imagepullsecret exists
 #
 # Results: /model-cache/perf/<epoch>_<job-name>/
 #
@@ -186,8 +185,6 @@ spec:
         - name: model-cache
           mountPath: /model-cache
         workingDir: /workspace
-      imagePullSecrets:
-      - name: nvcr-imagepullsecret
       restartPolicy: Never
       volumes:
       - name: model-cache

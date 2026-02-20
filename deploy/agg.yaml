@@ -11,8 +11,6 @@ spec:
       componentType: frontend
       extraPodSpec:
         containers: null
-        imagePullSecrets:
-          - name: nvcr-imagepullsecret
         mainContainer:
           command:
             - python3
@@ -29,7 +27,7 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.uid
-          image: nvcr.io/nvidian/dynamo-dev/karenc:dynamo-trtllm-v0.9.0-adp-runtime-checkpt
+          image: <dynamo-trtllm-container-path>
           name: ""
           resources: {}
         nodeSelector:
@@ -57,8 +55,6 @@ spec:
       envFromSecret: hf-token-secret
       extraPodSpec:
         containers: null
-        imagePullSecrets:
-          - name: nvcr-imagepullsecret
         mainContainer:
           args:
             - --model-path
@@ -123,7 +119,7 @@ spec:
               value: "61"
             - name: TLLM_LOG_LEVEL
               value: "VERBOSE"
-          image: nvcr.io/nvidian/dynamo-dev/karenc:dynamo-trtllm-v0.9.0-adp-runtime-checkpt
+          image: <dynamo-trtllm-container-path>
           name: ""
           resources: {}
           securityContext:
