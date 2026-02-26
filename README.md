@@ -32,7 +32,7 @@ datagen synthesize \
     --max-isl 110000 \
     --num-requests 10000
 ```
-(`conversation_trace.jsonl` is the original [Mooncake conversation trace](https://github.com/kvcache-ai/Mooncake/blob/main/FAST25-release/traces/conversation_trace.jsonl)
+(`conversation_trace.jsonl` is the original [Mooncake conversation trace](https://github.com/kvcache-ai/Mooncake/blob/main/FAST25-release/traces/conversation_trace.jsonl)).
 
 The ISL/OSL/cache hit statistics of the trace is below. 
 
